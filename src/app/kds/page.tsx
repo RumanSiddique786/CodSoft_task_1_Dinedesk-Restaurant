@@ -248,7 +248,7 @@ export default function KitchenDisplaySystem() {
           </button>
 
           <button
-            onClick={fetchOrders}
+            onClick={() => fetchOrders()}
             className="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
             title="Refresh tickets"
           >
