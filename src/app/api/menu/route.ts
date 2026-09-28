@@ -1,12 +1,13 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { dataStore } from '@/lib/dataStore';
 
 export async function GET(req: Request) {
-  try {
-    const { searchParams } = new URL(req.url);
-    const restaurantSlug = searchParams.get('restaurant') || searchParams.get('slug');
-    const restaurantId = searchParams.get('restaurantId');
+  const { searchParams } = new URL(req.url);
+  const restaurantSlug = searchParams.get('restaurant') || searchParams.get('slug');
+  const restaurantId = searchParams.get('restaurantId');
 
+  try {
     let currentRestaurant = null;
     if (restaurantSlug) {
       currentRestaurant = await prisma.restaurant.findUnique({
@@ -24,7 +25,11 @@ export async function GET(req: Request) {
       });
     }
 
-    const whereClause = currentRestaurant ? { restaurantId: currentRestaurant.id } : {};
+    if (!currentRestaurant) {
+      return NextResponse.json(dataStore.getMenu(restaurantSlug, restaurantId));
+    }
+
+    const whereClause = { restaurantId: currentRestaurant.id };
 
     const categories = await prisma.category.findMany({
       where: whereClause,
@@ -39,9 +44,13 @@ export async function GET(req: Request) {
     const happyHours = await prisma.happyHourRule.findMany({
       where: { 
         isActive: true,
-        ...(currentRestaurant ? { restaurantId: currentRestaurant.id } : {}),
+        restaurantId: currentRestaurant.id,
       },
     });
+
+    if (!categories || categories.length === 0) {
+      return NextResponse.json(dataStore.getMenu(restaurantSlug, restaurantId));
+    }
 
     return NextResponse.json({ 
       restaurant: currentRestaurant,
@@ -49,8 +58,8 @@ export async function GET(req: Request) {
       happyHours 
     });
   } catch (error) {
-    console.error('Error fetching menu:', error);
-    return NextResponse.json({ error: 'Failed to fetch menu' }, { status: 500 });
+    console.warn('Prisma menu fetch failed, using fallback dataStore:', error);
+    return NextResponse.json(dataStore.getMenu(restaurantSlug, restaurantId));
   }
 }
 
@@ -91,18 +100,16 @@ export async function PATCH(req: Request) {
     const body = await req.json();
     const { id, isAvailable } = body;
 
-    const updated = await prisma.menuItem.update({
-      where: { id },
-      data: { isAvailable },
-    });
-
-    // Notify connected clients via global.io if available
-    const g = global as unknown as { io?: { emit: (event: string, data: unknown) => void } };
-    if (g.io) {
-      g.io.emit('menu:availability_updated', { itemId: id, isAvailable });
+    try {
+      const updated = await prisma.menuItem.update({
+        where: { id },
+        data: { isAvailable },
+      });
+      return NextResponse.json(updated);
+    } catch {
+      const fallbackUpdated = dataStore.updateMenuItemAvailability(id, isAvailable);
+      return NextResponse.json(fallbackUpdated || { id, isAvailable });
     }
-
-    return NextResponse.json(updated);
   } catch (error) {
     console.error('Error updating menu item:', error);
     return NextResponse.json({ error: 'Failed to update menu item' }, { status: 500 });

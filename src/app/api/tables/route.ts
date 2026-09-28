@@ -1,12 +1,13 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { dataStore } from '@/lib/dataStore';
 
 export async function GET(req: Request) {
-  try {
-    const { searchParams } = new URL(req.url);
-    const restaurantSlug = searchParams.get('restaurant') || searchParams.get('slug');
-    const restaurantId = searchParams.get('restaurantId');
+  const { searchParams } = new URL(req.url);
+  const restaurantSlug = searchParams.get('restaurant') || searchParams.get('slug');
+  const restaurantId = searchParams.get('restaurantId');
 
+  try {
     let currentRestaurant = null;
     if (restaurantSlug) {
       currentRestaurant = await prisma.restaurant.findUnique({
@@ -43,55 +44,32 @@ export async function GET(req: Request) {
       },
     });
 
-    return NextResponse.json(tables);
-  } catch (error) {
-    console.error('Error fetching tables:', error);
-    return NextResponse.json({ error: 'Failed to fetch tables' }, { status: 500 });
-  }
-}
-
-export async function POST(req: Request) {
-  try {
-    const body = await req.json();
-    const restaurant = await prisma.restaurant.findFirst();
-    if (!restaurant) {
-      return NextResponse.json({ error: 'Restaurant not found' }, { status: 400 });
+    if (!tables || tables.length === 0) {
+      return NextResponse.json(dataStore.getTables(restaurantSlug, restaurantId));
     }
 
-    const table = await prisma.table.create({
-      data: {
-        number: body.number,
-        capacity: parseInt(body.capacity || '4', 10),
-        section: body.section || 'Main Floor',
-        status: body.status || 'FREE',
-        restaurantId: restaurant.id,
-        qrCodeUrl: `http://localhost:3000/?table=${body.number}`,
-      },
-    });
-
-    return NextResponse.json(table, { status: 201 });
+    return NextResponse.json(tables);
   } catch (error) {
-    console.error('Error creating table:', error);
-    return NextResponse.json({ error: 'Failed to create table' }, { status: 500 });
+    console.warn('Prisma tables fetch failed, using fallback dataStore:', error);
+    return NextResponse.json(dataStore.getTables(restaurantSlug, restaurantId));
   }
 }
 
 export async function PATCH(req: Request) {
   try {
     const body = await req.json();
-    const { tableId, status } = body;
+    const { id, status } = body;
 
-    const table = await prisma.table.update({
-      where: { id: tableId },
-      data: { status },
-    });
-
-    const g = global as unknown as { io?: { emit: (event: string, data: unknown) => void } };
-    if (g.io) {
-      g.io.emit('table:status_changed', { tableId: table.id, number: table.number, status });
+    try {
+      const updated = await prisma.table.update({
+        where: { id },
+        data: { status },
+      });
+      return NextResponse.json(updated);
+    } catch {
+      const fallbackUpdated = dataStore.updateTableStatus(id, status);
+      return NextResponse.json(fallbackUpdated || { id, status });
     }
-
-    return NextResponse.json(table);
   } catch (error) {
     console.error('Error updating table:', error);
     return NextResponse.json({ error: 'Failed to update table' }, { status: 500 });

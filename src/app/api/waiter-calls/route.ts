@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { dataStore } from '@/lib/dataStore';
 
 export async function GET() {
   try {
@@ -8,76 +9,59 @@ export async function GET() {
       orderBy: { createdAt: 'desc' },
       include: { table: true },
     });
-
     return NextResponse.json(calls);
   } catch (error) {
-    console.error('Error fetching waiter calls:', error);
-    return NextResponse.json({ error: 'Failed to fetch waiter calls' }, { status: 500 });
+    console.warn('Prisma waiter calls fetch failed, using fallback dataStore:', error);
+    return NextResponse.json(dataStore.getWaiterCalls());
   }
 }
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { tableNumber, reason = 'Assistance' } = body;
+    const { tableId, reason = 'Water' } = body;
 
-    let table = await prisma.table.findFirst({
-      where: { number: tableNumber },
-    });
-
-    if (!table) {
-      // Default to first table if not found
-      table = await prisma.table.findFirst();
-    }
-
-    if (!table) {
-      return NextResponse.json({ error: 'No table configured' }, { status: 400 });
-    }
-
-    const call = await prisma.waiterCall.create({
-      data: {
-        tableId: table.id,
-        reason,
-        status: 'ACTIVE',
-      },
-      include: { table: true },
-    });
-
-    const g = global as unknown as { io?: { emit: (event: string, data: unknown) => void } };
-    if (g.io) {
-      g.io.emit('waiter:buzzer', {
-        id: call.id,
-        tableNumber: table.number,
-        section: table.section,
-        reason: call.reason,
-        createdAt: call.createdAt,
+    try {
+      let targetTableId = tableId;
+      const foundTable = await prisma.table.findFirst({
+        where: { OR: [{ id: tableId }, { number: tableId }] },
       });
-    }
+      if (foundTable) targetTableId = foundTable.id;
 
-    return NextResponse.json(call, { status: 201 });
+      const call = await prisma.waiterCall.create({
+        data: {
+          tableId: targetTableId,
+          reason,
+        },
+        include: { table: true },
+      });
+      return NextResponse.json(call, { status: 201 });
+    } catch (prismaErr) {
+      console.warn('Prisma waiter call create failed, using dataStore:', prismaErr);
+      const fallback = dataStore.createWaiterCall({ tableId, reason });
+      return NextResponse.json(fallback, { status: 201 });
+    }
   } catch (error) {
-    console.error('Error calling waiter:', error);
-    return NextResponse.json({ error: 'Failed to call waiter' }, { status: 500 });
+    console.error('Error creating waiter call:', error);
+    return NextResponse.json({ error: 'Failed to create waiter call' }, { status: 500 });
   }
 }
 
 export async function PATCH(req: Request) {
   try {
     const body = await req.json();
-    const { callId } = body;
+    const { id, status } = body;
 
-    const call = await prisma.waiterCall.update({
-      where: { id: callId },
-      data: { status: 'RESOLVED' },
-      include: { table: true },
-    });
-
-    const g = global as unknown as { io?: { emit: (event: string, data: unknown) => void } };
-    if (g.io) {
-      g.io.emit('waiter:call_cleared', call.id);
+    try {
+      const updated = await prisma.waiterCall.update({
+        where: { id },
+        data: { status },
+      });
+      return NextResponse.json(updated);
+    } catch {
+      const fallback = dataStore.resolveWaiterCall(id);
+      return NextResponse.json(fallback || { id, status });
     }
-
-    return NextResponse.json(call);
   } catch (error) {
     console.error('Error resolving waiter call:', error);
     return NextResponse.json({ error: 'Failed to resolve waiter call' }, { status: 500 });

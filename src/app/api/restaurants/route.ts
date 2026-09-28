@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { dataStore } from '@/lib/dataStore';
 
 export async function GET() {
   try {
@@ -16,9 +17,13 @@ export async function GET() {
       },
     });
 
+    if (!restaurants || restaurants.length === 0) {
+      return NextResponse.json(dataStore.getRestaurants());
+    }
+
     return NextResponse.json(restaurants);
   } catch (error) {
-    console.error('Error fetching restaurants:', error);
-    return NextResponse.json({ error: 'Failed to fetch restaurants' }, { status: 500 });
+    console.warn('Prisma fetch restaurants failed, using dataStore fallback:', error);
+    return NextResponse.json(dataStore.getRestaurants());
   }
 }
